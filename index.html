@@ -1,23 +1,39 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <title>Ohana Portal</title>
+  
+  <!-- THIS IS THE MAGIC LINE THAT FIXES MOBILE RESOLUTION -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  
+  <style>
+    /* Remove default margins and prevent the parent page from scrolling */
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden; 
+      background-color: #f0f2f5; /* Matches your app's background */
+    }
+  </style>
 </head>
 <body>
   <iframe 
     src="https://script.google.com/macros/s/AKfycbxwcMH5irlMuFX9xCryU5WVzcHutwTWV768pk0dsGKYs0tfA4daxwNC-tSHw0HWXwkV/exec"
-    width="100%"
-    height="100%"
     allowfullscreen="true"
     style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: none;">
   </iframe>
 
   <script>
+    // Note: Browsers generally block requestFullscreen() unless it is triggered
+    // by a user clicking a button. If this gives you console errors, you can safely remove it.
     window.onload = function() {
       document.querySelector('iframe')
         .requestFullscreen()
         .catch((err) => {
-          console.error('Error attempting to enable full-screen mode:', err.message);
+          console.log('Fullscreen requires user interaction:', err.message);
         });
     };
   </script>

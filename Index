@@ -1,43 +1,25 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ohana Portal</title>
-    <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            width: 100%;
-            overflow: hidden; /* Prevents double scrollbars */
-        }
-        iframe {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
-    </style>
+  <title>Embedded Content</title>
 </head>
 <body>
+  <iframe 
+    src="https://script.google.com/macros/s/AKfycbwV-eQRfuUrZMYDZSAMSolkXyKqbCfOi01iTP_7cR2UbfDiEMlVQk6z1UmOtBJlZtPc/exec"
+    width="100%"
+    height="100%"
+    allowfullscreen="true"
+    style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: none;">
+  </iframe>
 
-    <iframe 
-        src="https://script.google.com/macros/s/AKfycbxwcMH5irlMuFX9xCryU5WVzcHutwTWV768pk0dsGKYs0tfA4daxwNC-tSHw0HWXwkV/exec" 
-        allowfullscreen="true">
-    </iframe>
-
-    <script>
-        // Optional: Attempt to request fullscreen on load if supported by browser policy
-        window.onload = function() {
-            const iframe = document.querySelector('iframe');
-            iframe.requestFullscreen().catch((err) => {
-                console.log(`Note: Fullscreen requires user interaction: ${err.message}`);
-            });
-        };
-    </script>
-
+  <script>
+    window.onload = function() {
+      document.querySelector('iframe')
+        .requestFullscreen()
+        .catch((err) => {
+          console.error('Error attempting to enable full-screen mode:', err.message);
+        });
+    };
+  </script>
 </body>
 </html>

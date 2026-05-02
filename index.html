@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <title>Ohana Portal</title>
 
-  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="icon" type="image/x-icon" href="favicon.png">
   
   <!-- THIS IS THE MAGIC LINE THAT FIXES MOBILE RESOLUTION -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -22,21 +22,24 @@
   </style>
 </head>
 <body>
+  <!-- Added CLIPBOARD permissions below to fix Android paste issues -->
   <iframe 
     src="https://script.google.com/macros/s/AKfycbxwcMH5irlMuFX9xCryU5WVzcHutwTWV768pk0dsGKYs0tfA4daxwNC-tSHw0HWXwkV/exec"
+    allow="clipboard-read; clipboard-write"
     allowfullscreen="true"
     style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: none;">
   </iframe>
 
   <script>
     // Note: Browsers generally block requestFullscreen() unless it is triggered
-    // by a user clicking a button. If this gives you console errors, you can safely remove it.
+    // by a user clicking a button.
     window.onload = function() {
-      document.querySelector('iframe')
-        .requestFullscreen()
-        .catch((err) => {
+      const frame = document.querySelector('iframe');
+      if (frame.requestFullscreen) {
+        frame.requestFullscreen().catch((err) => {
           console.log('Fullscreen requires user interaction:', err.message);
         });
+      }
     };
   </script>
 </body>

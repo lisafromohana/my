@@ -22,17 +22,16 @@
   </style>
 </head>
 <body>
-  <!-- Added CLIPBOARD permissions below to fix Android paste issues -->
+  <!-- Enhanced permissions for Android Image/Clipboard Support -->
   <iframe 
     src="https://script.google.com/macros/s/AKfycbxwcMH5irlMuFX9xCryU5WVzcHutwTWV768pk0dsGKYs0tfA4daxwNC-tSHw0HWXwkV/exec"
-    allow="clipboard-read; clipboard-write"
+    allow="clipboard-read; clipboard-write; picture-in-picture"
+    sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-modals"
     allowfullscreen="true"
     style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: none;">
   </iframe>
 
   <script>
-    // Note: Browsers generally block requestFullscreen() unless it is triggered
-    // by a user clicking a button.
     window.onload = function() {
       const frame = document.querySelector('iframe');
       if (frame.requestFullscreen) {

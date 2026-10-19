@@ -1286,6 +1286,12 @@ html[data-theme="dark"] .mb-b{color:#9cc0ff;background:rgba(79,141,253,.16)}
           </label>
           <input type="email" id="email" placeholder="example@mail.com" inputmode="email"/>
         </div>
+        <div class="fr" id="row-otp" style="display:none">
+          <label style="cursor:pointer;display:flex;gap:8px;align-items:flex-start;font-size:12px;font-weight:700;text-transform:none">
+            <input type="checkbox" id="otp-check" onchange="otpToggle()" style="width:18px;height:18px;padding:0;margin:1px 0 0;flex:none;-webkit-appearance:checkbox;appearance:auto;accent-color:var(--pri);cursor:pointer"/>
+            <span>OTP — existing account: send the claim email (with the 3 steps) using this account's email + password and its saved link</span>
+          </label>
+        </div>
         <div class="fr" id="row-password">
           <label>Password
             <div style="display:flex;gap:4px"><span class="mbtn mb-g" onclick="suggestPwd()">✨ Suggest</span><span class="mbtn mb-b" onclick="cpVal('password')">📋 Copy</span></div>
@@ -3887,7 +3893,8 @@ function handleAction(type, confirmed){
     contactedId:gi('draft-cid').value||'',
     email:v('email'),link:v('link'),redNoteId:v('redNoteId'),
     password:isNew?'NA2':v('password'),addon:v_el('addon'),rowId:v('rowId'),
-    info:v('additionalInfo'),pic:v('picData'),version:draftVersion,resendRow:v('resend-row')};
+    info:v('additionalInfo'),pic:v('picData'),version:draftVersion,resendRow:v('resend-row'),
+    otp:(type==='send' && !!gi('otp-check') && gi('otp-check').checked && gi('row-otp').style.display!=='none')};
   var resending = !!data.resendRow; // finder-corrected listing: the server reuses the original password
   if(!data.email||!data.link){draftMsg('Email and Link required!','e');return;}
   if(type==='draft' && (isNew || resending)){draftMsg('No draft here — use Send & Save.','e');return;}
@@ -3917,7 +3924,7 @@ function handleAction(type, confirmed){
 
 function resetDraftForm(){
   ['email','link','redNoteId','password','rowId','additionalInfo'].forEach(function(id){gi(id).value='';});
-  gi('addon').value='0';gi('draft-cid').value='';
+  gi('addon').value='0';gi('draft-cid').value='';otpHide();
   gi('resend-row').value='';gi('resend-banner').style.display='none';setDraftVersion(draftVersion);
   clearImage();updateLinkDisp();
   gi('finder-media-grid').innerHTML='';gi('finder-media-links').textContent='';gi('finder-media-card').style.display='none';
@@ -3987,7 +3994,34 @@ function alertPaste() {
   alert("Browser security prevents direct image paste. Please click anywhere on the page and press Ctrl+V (or Cmd+V) to paste your image.");
 }
 
-function checkEmail(){var e=v('email');if(!e){draftMsg('Enter email first','e');return;}grun('findPasswordByEmail',[e],function(p){if(p){gi('password').value=p;draftMsg('Password found!','s');}else draftMsg('Not found','e');});}
+// Check: finds the account's password (as before). When one is found, the OTP option appears.
+var otpFound = null, otpPrevLink = '';
+function checkEmail(){
+  var e=v('email');if(!e){draftMsg('Enter email first','e');return;}
+  otpHide();
+  grun('findAccountByEmail',[e],function(a){
+    if(a && a.password){
+      gi('password').value=a.password; draftMsg('Password found!','s');
+      otpFound={email:e.toLowerCase(),link:a.link||''}; gi('row-otp').style.display='';
+    } else draftMsg('Not found','e');
+  });
+}
+function otpToggle(){
+  var on=gi('otp-check').checked;
+  if(on && otpFound){
+    otpPrevLink=v('link'); if(otpFound.link) gi('link').value=otpFound.link;
+    draftMsg("OTP on: the claim email (with the 3 steps) will go out with this account's email, password and saved link.",'i');
+  } else if(!on){
+    if(otpFound && otpFound.link && v('link')===otpFound.link) gi('link').value=otpPrevLink;
+    otpPrevLink='';
+  }
+}
+function otpHide(){
+  var row=gi('row-otp'); if(row) row.style.display='none';
+  var c=gi('otp-check'); if(c && c.checked){ c.checked=false; otpToggle(); }
+  otpFound=null; otpPrevLink='';
+}
+(function(){ var em=gi('email'); if(em) em.addEventListener('input',function(){ otpHide(); }); })();
 function checkRedNote(){var id=v('redNoteId');if(!id){draftMsg('Enter XHS ID first','e');return;}grun('findInfoByRedNote',[id],function(info){if(info){gi('additionalInfo').value=info;updateLinkDisp();draftMsg('Info imported!','s');}else draftMsg('XHS ID not found','e');});}
 function updateLinkDisp(){var t=gi('additionalInfo').value,d=gi('linkDisp');d.innerHTML=t.replace(/(https?:\/\/[^\s]+)/g,function(u){return'<a href="'+u+'" target="_blank">'+u+'</a>';})||'No clickable links yet.';}
 function suggestPwd(){
@@ -4170,7 +4204,7 @@ function grun(fn,args,success,fail){
   var tries = API_RETRY.test(fn) ? 3 : 1;
   (function attempt(n){
     var ctl = ('AbortController' in window) ? new AbortController() : null;
-    var timer = ctl ? setTimeout(function(){ ctl.abort(); }, n === 1 ? 20000 : 30000) : null;
+    var timer = ctl ? setTimeout(function(){ ctl.abort(); }, tries > 1 ? (n === 1 ? 20000 : 30000) : 120000) : null;
     // text/plain keeps this a "simple" request (no CORS preflight), which Apps Script web apps support.
     fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({fn:fn,args:args||[]}),redirect:'follow',signal:ctl?ctl.signal:undefined})
       .then(function(r){return r.text();})
@@ -4181,7 +4215,7 @@ function grun(fn,args,success,fail){
       }, function(e){
         if(timer) clearTimeout(timer);
         if(n < tries) setTimeout(function(){ attempt(n+1); }, 500 * n);
-        else onErr('Could not reach the server — please check your connection and try again.');
+        else onErr(tries > 1 ? 'Could not reach the server — please check your connection and try again.' : 'The server is taking too long to answer. It may still have saved — refresh and check before sending again.');
       });
   })(1);
 }

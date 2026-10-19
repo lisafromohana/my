@@ -4142,7 +4142,7 @@ lgInit();
 // Works on your own domain (not inside Apps Script) once ONESIGNAL_APP_ID is
 // filled in. Every user is linked to OneSignal by username, so the server can
 // push to one person (a new 发布通知) or to all finders (10+ new listings).
-var ONESIGNAL_APP_ID = '';
+var ONESIGNAL_APP_ID = '7dfb1f1d-15b6-4a07-b5b8-93f330465250';
 var pushOS = null;
 function pushConfigured(){ return !!ONESIGNAL_APP_ID && !(window.google && google.script && google.script.run); }
 function pushIsIOS(){ return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }

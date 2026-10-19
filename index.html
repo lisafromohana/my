@@ -1289,7 +1289,7 @@ html[data-theme="dark"] .mb-b{color:#9cc0ff;background:rgba(79,141,253,.16)}
         <div class="fr" id="row-otp" style="display:none">
           <label style="cursor:pointer;display:flex;gap:8px;align-items:flex-start;font-size:12px;font-weight:700;text-transform:none">
             <input type="checkbox" id="otp-check" onchange="otpToggle()" style="width:18px;height:18px;padding:0;margin:1px 0 0;flex:none;-webkit-appearance:checkbox;appearance:auto;accent-color:var(--pri);cursor:pointer"/>
-            <span>OTP — existing account: send the claim email (with the 3 steps) using this account's email + password and its saved link</span>
+            <span>OTP — existing account: send the claim email (with the 3 steps) with this account's email + password and the new link</span>
           </label>
         </div>
         <div class="fr" id="row-password">
@@ -4009,11 +4009,7 @@ function checkEmail(){
 function otpToggle(){
   var on=gi('otp-check').checked;
   if(on && otpFound){
-    otpPrevLink=v('link'); if(otpFound.link) gi('link').value=otpFound.link;
-    draftMsg("OTP on: the claim email (with the 3 steps) will go out with this account's email, password and saved link.",'i');
-  } else if(!on){
-    if(otpFound && otpFound.link && v('link')===otpFound.link) gi('link').value=otpPrevLink;
-    otpPrevLink='';
+    draftMsg("OTP on: the claim email (with the 3 steps) will go out with this account's email and password, and the new listing link above.",'i');
   }
 }
 function otpHide(){

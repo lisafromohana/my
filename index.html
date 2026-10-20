@@ -4413,6 +4413,80 @@ var API_IDEM = /^(processForm|returnToFinder|sendToDraftCreator|sendOtherToDraft
 // (that is how a just-returned listing could pop back into the inbox until the next login).
 var STALE_GUARD = /^(getClaimedInbox|getDraftInbox|getAvailableLinks|getReturnedListings|getDrafts)$/;
 var reqSeq = 0, lastApplied = {};
+
+// One HTTP request to the Apps Script server. done(parsedJson | null, why).
+// "Safe" calls are hedged: if there is no answer after a few seconds another identical request is
+// fired in parallel and the first answer wins (much better on slow/flaky networks than waiting,
+// aborting and starting over). Writes are sent once and given plenty of time.
+function apiSend(body, o, done){
+  var payload = JSON.stringify(body), maxTry = o.maxTry, hedge = o.hedge, launched = 0, failed = 0, settled = false, live = [], hedgeT = null, why = '';
+  var overallT = setTimeout(function(){ why = why || 'timeout'; finish(null); }, o.overall);
+  function finish(j){
+    if(settled) return; settled = true;
+    clearTimeout(overallT); clearTimeout(hedgeT);
+    live.forEach(function(c){ try{ c.abort(); }catch(e){} });
+    done(j, why);
+  }
+  function fail(d){
+    if(settled) return;
+    why = d || why; failed++;
+    // back off between tries: an overloaded Google answers with error pages
+    if(failed >= launched){ if(launched < maxTry) setTimeout(launch, 700 * failed * failed); else finish(null); }
+  }
+  function launch(){
+    if(settled || launched >= maxTry) return;
+    launched++;
+    var ctl = ('AbortController' in window) ? new AbortController() : null;
+    if(ctl) live.push(ctl);
+    // text/plain keeps this a "simple" request (no CORS preflight), which Apps Script web apps support.
+    fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:payload,redirect:'follow',signal:ctl?ctl.signal:undefined})
+      .then(function(r){ return r.text().then(function(t){ return {st:r.status, t:t}; }); })
+      .then(function(x){
+        var j; try{ j = JSON.parse(x.t); }catch(e){ fail(x.st && x.st !== 200 ? 'HTTP ' + x.st : 'Google sent an error page'); return; }
+        finish(j);
+      }, function(e){ fail(e && e.name === 'AbortError' ? 'timeout' : 'network'); });
+    if(o.safe && launched < maxTry){ clearTimeout(hedgeT); hedgeT = setTimeout(launch, hedge[Math.min(launched - 1, hedge.length - 1)]); }
+  }
+  launch();
+}
+
+function sendCall(fn, args, success, onErr){
+  var idem = API_IDEM.test(fn), safe = API_RETRY.test(fn) || idem, isLogin = (fn === 'login');
+  var body = idem ? {fn:fn, args:args||[], rid:Date.now().toString(36)+Math.random().toString(36).slice(2,10)} : {fn:fn, args:args||[]};
+  apiSend(body, {
+    safe: safe, maxTry: isLogin ? 4 : (safe ? 3 : 1),
+    hedge: isLogin ? [9000] : (idem ? [8000, 15000] : [10000, 15000]),
+    overall: idem ? 90000 : (isLogin ? 60000 : (safe ? 45000 : 120000))
+  }, function(j, why){
+    if(j){ if(j.ok){ if(success) success(j.result); } else onErr(j.error || 'Request failed'); }
+    else onErr((safe && !idem) ? 'Could not reach the server — please check your connection and try again.' + (why ? ' (' + why + ')' : '')
+                               : 'The server is taking too long to answer. It may still have saved — refresh and check before sending again.');
+  });
+}
+
+// Refresh calls made at the same moment (badges + listings + earnings…) travel as ONE request, so
+// the server runs one execution instead of four (Apps Script allows only ~30 at a time).
+var BATCHABLE = /^get[A-Z]/, batchQ = [], batchT = null;
+function flushBatch(){
+  var items = batchQ; batchQ = []; batchT = null;
+  while(items.length){
+    var chunk = items.splice(0, 8);
+    if(chunk.length === 1){ sendCall(chunk[0].fn, chunk[0].args, chunk[0].success, chunk[0].onErr); continue; }
+    (function(chunk){
+      apiSend({batch: chunk.map(function(c){ return {fn:c.fn, args:c.args}; })}, {safe:true, maxTry:3, hedge:[10000, 15000], overall:50000}, function(j, why){
+        if(j && j.ok && j.results && j.results.length === chunk.length){
+          chunk.forEach(function(c, i){ var r = j.results[i]; if(r && r.ok){ if(c.success) c.success(r.result); } else c.onErr((r && r.error) || 'Request failed'); });
+        } else if(j){
+          // an older server that doesn't know "batch": send them one by one
+          chunk.forEach(function(c){ sendCall(c.fn, c.args, c.success, c.onErr); });
+        } else {
+          chunk.forEach(function(c){ c.onErr('Could not reach the server — please check your connection and try again.' + (why ? ' (' + why + ')' : '')); });
+        }
+      });
+    })(chunk);
+  }
+}
+
 function grun(fn,args,success,fail){
   if(success && STALE_GUARD.test(fn)){
     var gKey = fn + '|' + JSON.stringify(args||[]), gSeq = ++reqSeq, gOrig = success;
@@ -4424,37 +4498,12 @@ function grun(fn,args,success,fail){
   }
   var onErr=function(msg){var e={message:msg};if(fail)fail(e);else console.error(fn+' failed:',msg);};
   if(!API_URL){onErr('API_URL is not set');return;}
-  // Read-only/idempotent calls (login, get*, search…) are "hedged": if no answer after a few
-  // seconds a 2nd/3rd identical request is fired in parallel and the first answer wins — much
-  // better on slow or flaky networks than waiting, aborting and starting over. Writes are sent
-  // exactly once and given plenty of time (they may well have saved even if the reply is slow).
-  var idem = API_IDEM.test(fn), safe = API_RETRY.test(fn) || idem, maxTry = safe ? 3 : 1, launched = 0, failed = 0, settled = false, live = [], hedgeT = null;
-  var payload = JSON.stringify(idem ? {fn:fn,args:args||[],rid:Date.now().toString(36)+Math.random().toString(36).slice(2,10)} : {fn:fn,args:args||[]});
-  var overallT = setTimeout(function(){ finish(null); }, idem ? 90000 : (safe ? 45000 : 120000));
-  function finish(j){
-    if(settled) return; settled = true;
-    clearTimeout(overallT); clearTimeout(hedgeT);
-    live.forEach(function(c){ try{ c.abort(); }catch(e){} });
-    if(j){ if(j.ok){ if(success) success(j.result); } else onErr(j.error || 'Request failed'); }
-    else onErr((safe && !idem) ? 'Could not reach the server — please check your connection and try again.' : 'The server is taking too long to answer. It may still have saved — refresh and check before sending again.');
+  if(BATCHABLE.test(fn) && !API_IDEM.test(fn)){
+    batchQ.push({fn:fn, args:args||[], success:success, onErr:onErr});
+    if(!batchT) batchT = setTimeout(flushBatch, 30);
+    return;
   }
-  function launch(){
-    if(settled || launched >= maxTry) return;
-    launched++;
-    var ctl = ('AbortController' in window) ? new AbortController() : null;
-    if(ctl) live.push(ctl);
-    // text/plain keeps this a "simple" request (no CORS preflight), which Apps Script web apps support.
-    fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:payload,redirect:'follow',signal:ctl?ctl.signal:undefined})
-      .then(function(r){return r.text();})
-      .then(function(t){ try{ return JSON.parse(t); }catch(e){ throw new Error('bad response'); } })
-      .then(function(j){ finish(j); }, function(){
-        failed++;
-        if(settled) return;
-        if(failed >= launched){ if(launched < maxTry) setTimeout(launch, 300 * failed); else finish(null); }
-      });
-    if(safe && launched < maxTry){ clearTimeout(hedgeT); hedgeT = setTimeout(launch, idem ? (launched === 1 ? 8000 : 15000) : (launched === 1 ? 6000 : 10000)); }
-  }
-  launch();
+  sendCall(fn, args, success, onErr);
 }
 
 // Wake the Google server and open the connection while the user is still typing,

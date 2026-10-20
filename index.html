@@ -2622,6 +2622,9 @@ grun('getAvailableLinks',[],function(L){
 
     var cnt=L.length;set('fa-cnt',cnt);var b=gi('avail-badge');b.textContent=cnt;b.style.display=cnt>0?'':'none';
     var div=gi('avail-list');
+    var availSig = filterVal + '|' + L.map(function(l){ return l.ID; }).join(',');
+    if(availSig === window.lastAvailSig && div.children.length && !div.querySelector('.spinner')) return;   // same listings → keep the page as is
+    window.lastAvailSig = availSig;
     if(!L.length){div.innerHTML='<div style="color:var(--muted2);padding:14px;font-size:13px">No available listings right now.</div>';return;}
     
     L.sort(function(a,b){return String(b.CreatedAt).localeCompare(String(a.CreatedAt));});
@@ -3881,6 +3884,7 @@ function returnNoPic(id) {
 // ── DRAFT CREATE ─────────────────────────────────────────────
 function refreshDrafts(){
   grun('getClaimedInbox', [CU.username], function(claimed) {
+    claimed = claimed.filter(function(c){ return !(hiddenIds[c.ID] && Date.now() - hiddenIds[c.ID] < 60000); });
     var list=gi('claimedList'),cnt=gi('claimed-count');
     if(cnt)cnt.textContent='('+claimed.length+')';
     
@@ -3951,6 +3955,7 @@ function refreshDrafts(){
   });
 }
 
+var hiddenIds = {};   // items just reverted/removed by this user — kept out of the lists for a minute
 function revertToFinder(id) {
   var selectEl = document.getElementById('revert-reason-' + id);
   if(!selectEl) return;
@@ -3959,12 +3964,21 @@ function revertToFinder(id) {
   if(!confirm('Are you sure you want to revert this back to the Finder?')) return;
   
   grun('returnToFinder', [id, remark], function(res) {
-    if(res.success) {
-       // Refresh the inbox UI so the item disappears
+    if(res && res.success) {
+       // gone right away — no waiting for the next refresh
+       hiddenIds[id] = Date.now();
+       var row = document.getElementById('inbox-item-' + id); if(row && row.parentNode) row.parentNode.removeChild(row);
+       var lst = gi('claimedList'), left = lst ? lst.querySelectorAll('.ditem').length : 0, cnt = gi('claimed-count');
+       if(cnt) cnt.textContent = '(' + left + ')';
+       if(lst && !left) lst.innerHTML = '<div style="color:var(--muted2);font-size:13px;padding:6px 0">No active inbox items</div>';
        if(typeof refreshDrafts === 'function') refreshDrafts();
     } else {
-       alert('Error: ' + res.error);
+       alert('Error: ' + ((res && res.error) || 'unknown'));
     }
+  }, function(e){
+    // the reply was lost, but the return may have gone through — resync instead of leaving a stale list
+    alert('Server is slow: ' + e.message);
+    if(typeof refreshDrafts === 'function') refreshDrafts();
   });
 }
 
@@ -4393,7 +4407,17 @@ var API_URL = 'https://script.google.com/macros/s/AKfycbxwcMH5irlMuFX9xCryU5WVzc
 // Read-only calls (login, get*, search…) are retried automatically; anything that
 // writes data is sent once only, so a retry can never create a duplicate.
 var API_RETRY = /^(login|get[A-Z]|search|find|finderSearch|finderCheck|checkDuplicateSend|uid)/;
+// saving calls that carry a request id so the server never saves them twice → safe to re-send when the reply is slow
+var API_IDEM = /^(processForm|returnToFinder|sendToDraftCreator|sendOtherToDraft|updateContactedInfo|finalizeSendToDraft|markAsTanCheng)$/;
+// Lists refreshed by polling: a slow OLD reply must never overwrite a NEWER one that already arrived
+// (that is how a just-returned listing could pop back into the inbox until the next login).
+var STALE_GUARD = /^(getClaimedInbox|getDraftInbox|getAvailableLinks|getReturnedListings|getDrafts)$/;
+var reqSeq = 0, lastApplied = {};
 function grun(fn,args,success,fail){
+  if(success && STALE_GUARD.test(fn)){
+    var gKey = fn + '|' + JSON.stringify(args||[]), gSeq = ++reqSeq, gOrig = success;
+    success = function(r){ if(gSeq < (lastApplied[gKey]||0)) return; lastApplied[gKey] = gSeq; gOrig(r); };
+  }
   if(window.google && google.script && google.script.run){
     var runner=google.script.run;if(success)runner=runner.withSuccessHandler(success);if(fail)runner=runner.withFailureHandler(fail);else runner=runner.withFailureHandler(function(e){console.error(fn+' failed:',e.message);});runner[fn].apply(runner,args);
     return;
@@ -4404,15 +4428,15 @@ function grun(fn,args,success,fail){
   // seconds a 2nd/3rd identical request is fired in parallel and the first answer wins — much
   // better on slow or flaky networks than waiting, aborting and starting over. Writes are sent
   // exactly once and given plenty of time (they may well have saved even if the reply is slow).
-  var safe = API_RETRY.test(fn), maxTry = safe ? 3 : 1, launched = 0, failed = 0, settled = false, live = [], hedgeT = null;
-  var payload = JSON.stringify({fn:fn,args:args||[]});
-  var overallT = setTimeout(function(){ finish(null); }, safe ? 45000 : 120000);
+  var idem = API_IDEM.test(fn), safe = API_RETRY.test(fn) || idem, maxTry = safe ? 3 : 1, launched = 0, failed = 0, settled = false, live = [], hedgeT = null;
+  var payload = JSON.stringify(idem ? {fn:fn,args:args||[],rid:Date.now().toString(36)+Math.random().toString(36).slice(2,10)} : {fn:fn,args:args||[]});
+  var overallT = setTimeout(function(){ finish(null); }, idem ? 90000 : (safe ? 45000 : 120000));
   function finish(j){
     if(settled) return; settled = true;
     clearTimeout(overallT); clearTimeout(hedgeT);
     live.forEach(function(c){ try{ c.abort(); }catch(e){} });
     if(j){ if(j.ok){ if(success) success(j.result); } else onErr(j.error || 'Request failed'); }
-    else onErr(safe ? 'Could not reach the server — please check your connection and try again.' : 'The server is taking too long to answer. It may still have saved — refresh and check before sending again.');
+    else onErr((safe && !idem) ? 'Could not reach the server — please check your connection and try again.' : 'The server is taking too long to answer. It may still have saved — refresh and check before sending again.');
   }
   function launch(){
     if(settled || launched >= maxTry) return;
@@ -4428,7 +4452,7 @@ function grun(fn,args,success,fail){
         if(settled) return;
         if(failed >= launched){ if(launched < maxTry) setTimeout(launch, 300 * failed); else finish(null); }
       });
-    if(safe && launched < maxTry){ clearTimeout(hedgeT); hedgeT = setTimeout(launch, launched === 1 ? 6000 : 10000); }
+    if(safe && launched < maxTry){ clearTimeout(hedgeT); hedgeT = setTimeout(launch, idem ? (launched === 1 ? 8000 : 15000) : (launched === 1 ? 6000 : 10000)); }
   }
   launch();
 }

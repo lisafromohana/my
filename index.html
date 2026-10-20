@@ -413,6 +413,13 @@ html[data-theme="dark"] .mb-b{color:#9cc0ff;background:rgba(79,141,253,.16)}
     <button class="btn btn-r btn-full btn-sm" onclick="logout()">Sign out</button></div>
 </div> <!-- MAKE SURE THIS DIV IS HERE -->
 
+<div id="oh-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.55); z-index:1100; align-items:center; justify-content:center;">
+   <div style="background:var(--cardS); padding:22px; border-radius:14px; width:92%; max-width:400px; max-height:90vh; overflow:auto; box-shadow:0 8px 32px rgba(0,0,0,.25);">
+      <div id="oh-modal-title" style="font-size:16px; font-weight:700; color:var(--pri); margin-bottom:8px;"></div>
+      <div id="oh-modal-body" style="font-size:13.5px; line-height:1.6; color:var(--txt);"></div>
+      <div id="oh-modal-btns" style="display:flex; flex-direction:column; gap:8px; margin-top:14px;"></div>
+   </div>
+</div>
 <div id="email-confirm-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
    <div style="background:var(--cardS); padding:22px; border-radius:14px; width:92%; max-width:380px; box-shadow:0 8px 32px rgba(0,0,0,.2);">
       <div style="font-size:16px; font-weight:700; color:var(--pri); margin-bottom:4px;">📧 Confirm the email address</div>
@@ -2922,7 +2929,94 @@ function queueMedia(input){
   });
 }
 
+// ── 发送前检查：租金/租期提醒 + 重复发送提醒（中文）─────────────────
+function ohEsc(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function ohModal(title, html, buttons){
+  gi('oh-modal-title').textContent = title;
+  gi('oh-modal-body').innerHTML = html;
+  var box = gi('oh-modal-btns'); box.innerHTML = '';
+  buttons.forEach(function(b){
+    var el = document.createElement('button');
+    el.className = 'btn btn-full' + (b.cls ? ' ' + b.cls : '');
+    el.style.height = 'auto'; el.style.minHeight = '40px'; el.style.padding = '9px 14px'; el.style.whiteSpace = 'normal';
+    el.textContent = b.text;
+    el.onclick = function(){ closeOhModal(); if(b.fn) b.fn(); };
+    box.appendChild(el);
+  });
+  gi('oh-modal').style.display = 'flex';
+}
+function closeOhModal(){ gi('oh-modal').style.display = 'none'; }
+
+// Advisory only — the finder still confirms by hand.
+function rentLeaseCheck(info){
+  var t = String(info || '');
+  var rent  = /租金|房租|月租|租价|价格|rent|\$|＄|刀|美金|美元|usd|¥|￥|元|块|\d{3,5}\s*(\/|每)?\s*(月|mo\b|month)/i.test(t);
+  var lease = /租期|租约|lease|短租|长租|转租|续租|sublet|\d+\s*个月|[二三四五六七八九十两]\s*个月|半年|一年|整年|学期|暑假|暑期|寒假|到期|起租|入住|搬入|\d+\s*月\s*(到|至|-|~|—)|(到|至)\s*\d+\s*月|\d+\s*[\/.]\s*\d+\s*(到|至|-|~|—)|term\b|fall\b|spring\b|summer\b|winter\b|month\s*to\s*month/i.test(t);
+  return {rent: rent, lease: lease};
+}
+
+function dupStatusText(d){
+  if(d.status === 'uploading') return '图片/视频还在上传中';
+  if(d.status === 'completed') return '草稿师已经处理完成';
+  if(d.takenBy) return '草稿师 ' + d.takenBy + ' 已经领取（在 TA 的 Active Inbox 里）';
+  return '正在草稿师的 Inbox 里等待领取';
+}
+function dupAgeText(m){
+  if(m < 0) return '刚才';
+  if(m < 1) return '刚刚';
+  if(m < 60) return m + ' 分钟前';
+  if(m < 1440) return Math.round(m/60) + ' 小时前';
+  return Math.round(m/1440) + ' 天前';
+}
+
+// Asks 「租金/租期」 first (the duplicate check runs in the background meanwhile), then, if this
+// listing was already sent, asks whether to edit it or send again.
+// done('send') | done('edit', dup). Cancelling calls nothing.
+function preSendGuards(info, rn, lk, done, onWait){
+  var st = {ready:false, res:null, cb:null};
+  var fin = function(r){ st.ready = true; st.res = (r && r.found) ? r : null; if(st.cb){ var c = st.cb; st.cb = null; c(); } };
+  grun('checkDuplicateSend', [rn, lk, CU.username], fin, function(){ fin(null); });
+  var c = rentLeaseCheck(info);
+  var row = function(ok, label){ return '<div style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;padding:8px 10px;border-radius:8px;background:'+(ok?'var(--green-bg)':'var(--red-bg)')+';color:'+(ok?'var(--green-t)':'var(--red-t)')+';font-weight:600"><span>'+(ok?'✅':'❗')+'</span><span>'+label+'<br><span style="font-weight:500;font-size:12px">'+(ok?'已检测到':'没有检测到，请确认')+'</span></span></div>'; };
+  var html = '<div>发送给草稿师之前，请再检查一下房源信息里有没有写明：</div>'
+    + row(c.rent, '💰 租金（每个月多少钱）')
+    + row(c.lease, '📅 租期（租多久 / 几月到几月）')
+    + '<div style="font-size:12px;color:var(--txt2);margin-top:8px">没写清楚的话，草稿师没法做草稿，很容易被退回哦～</div>';
+  ohModal('⚠️ 发送前请确认', html, [
+    {text:'✅ 已写明，确认发送', cls:'btn-p', fn:function(){
+      var go = function(){
+        if(!st.res){ done('send'); return; }
+        var d = st.res, who = d.mine ? '你' : (d.finder ? '同事 ' + d.finder : '别人');
+        var h = '<div>这个房源 <b>' + ohEsc(rn || '') + '</b> 已经由 <b>' + ohEsc(who) + '</b> 在 <b>' + dupAgeText(d.ageMin) + '</b> 发送过了。</div>'
+          + '<div style="margin-top:6px">当前状态：<b>' + ohEsc(dupStatusText(d)) + '</b></div>'
+          + '<div style="margin-top:6px;color:var(--txt2);font-size:12px">可能上一次其实已经发送成功了，只是页面提示了错误。</div>'
+          + '<div style="margin-top:8px"><b>你还要再发送一次吗？</b>' + ((d.mine && d.canEdit) ? '还是要编辑刚才发送的内容？（草稿师已领取也可以编辑，会同步更新）' : '') + '</div>';
+        var btns = [];
+        if(d.mine && d.canEdit) btns.push({text:'✏️ 编辑刚才发送的', cls:'btn-p', fn:function(){ done('edit', d); }});
+        btns.push({text:'仍然再发送一次', fn:function(){ done('send'); }});
+        btns.push({text:'取消', fn:function(){}});
+        ohModal('🔔 这个房源已经发送过啦', h, btns);
+      };
+      if(st.ready) go(); else { st.cb = go; if(onWait) onWait(); }
+    }},
+    {text:'返回修改', fn:function(){}}
+  ]);
+}
+
 function finderSend(){
+  var linkId=gi('sub-linkid').value, info=gi('sub-info').value;
+  if(!info){showSubRes('Please fill in listing info first.','e');return;}
+  if(!linkId){showSubRes('Link ID missing. Re-match the URL.','e');return;}
+  preSendGuards(info, gi('sub-rnid').value, linkId, function(mode, dup){
+    if(mode === 'edit'){
+      gi('sub-cid').value = dup.id; gi('sub-std').value = dup.status;
+      gi('sub-send-btn').style.display = 'none'; gi('sub-block-btn').style.display = 'none'; gi('sub-upd-btn').style.display = '';
+      finderUpdate();
+    } else finderSendGo();
+  }, function(){ showSubRes('正在检查是否重复发送…','i'); });
+}
+
+function finderSendGo(){
   var linkId=gi('sub-linkid').value,url=gi('sub-url').value,method=gi('sub-method').value,info=gi('sub-info').value;
   var picData=gi('f-picData').value;
   if(picData){ subMediaQ.unshift({dataUrl:picData, name:'profile_pic.jpg', type:'image/jpeg'}); } 
@@ -3005,6 +3099,7 @@ function finderUpdate(){
   var btn=gi('sub-upd-btn');btn.disabled=true;btn.textContent='Updating…';
   var hasMedia = subMediaQ.length > 0;
   var wasUploading = (v('sub-std') === 'uploading');
+  var finalizeIfNeeded = function(ok, bad){ if(wasUploading) grun('finalizeSendToDraft', [cid], ok, bad); else ok(); };
   var server = gi('sub-server') ? gi('sub-server').value : 'cloud';
 
   grun('updateContactedInfo',[cid,info,hasMedia],function(){
@@ -3018,7 +3113,7 @@ function finderUpdate(){
             var done=false;
             var wrap=setTimeout(function(){ if(!done){done=true; showSubRes('Updated!','s');btn.disabled=false;btn.textContent='Update'; setTimeout(function(){closeSubBox(); loadContacted(); loadTanCheng();},1000);} }, 4000);
             
-            grun('finalizeSendToDraft', [cid], function(){
+            finalizeIfNeeded(function(){
                if(!done){done=true; clearTimeout(wrap); showSubRes('Updated!','s');btn.disabled=false;btn.textContent='Update'; subMediaQ=[];gi('sub-preview').innerHTML=''; if(gi('f-imgPreview')) gi('f-imgPreview').style.display='none'; if(gi('f-picData')) gi('f-picData').value=''; setTimeout(function(){closeSubBox(); loadContacted(); loadTanCheng();},1000);}
             }, function(){ if(!done){done=true; clearTimeout(wrap); showSubRes('Updated!','s');btn.disabled=false;btn.textContent='Update'; setTimeout(function(){closeSubBox(); loadContacted(); loadTanCheng();},1000);} });
             return;
@@ -3143,6 +3238,57 @@ function autoTanChengOther(cid, btn){
 }
 
 function sendOther(){
+  var cid=v('o-cid'), info=v('o-info');
+  if(!cid){showORes('Contact ID required.','e');return;}
+  if(!info){showORes('Info required.','e');return;}
+  preSendGuards(info, cid, 'none', function(mode, dup){
+    if(mode === 'edit') otherEditExisting(dup); else sendOtherGo();
+  }, function(){ showORes('正在检查是否重复发送…','i'); });
+}
+
+// Edit the listing that was already sent (works even after a draft maker took it — the
+// Active Inbox reads this same row, so it updates there too). No second payment.
+function otherEditExisting(dup){
+  var cid = dup.id, info = v('o-info');
+  var picEl=gi('o-picData'); var picData=picEl?picEl.value:'';
+  if(picData){ oMediaQ.unshift({dataUrl:picData, name:'profile_pic.jpg', type:'image/jpeg'}); }
+  var btn=gi('o-send-btn'); btn.disabled=true; btn.textContent='Updating…'; showORes('正在更新已发送的房源…','i');
+  var server = gi('o-server') ? gi('o-server').value : 'cloud';
+  var finished = false;
+  var finish = function(){
+    if(finished) return; finished = true;
+    btn.disabled=false; btn.textContent='🚀 Send to Draft';
+    showORes('✅ 已更新刚才发送的房源（草稿师的 Inbox 里也会同步更新）','s');
+    ['o-cid','o-info'].forEach(function(id){ if(gi(id)) gi(id).value=''; });
+    oMediaQ=[]; if(gi('o-preview')) gi('o-preview').innerHTML=''; if(gi('o-up-status')) gi('o-up-status').textContent='';
+    if(gi('o-files')) gi('o-files').value=''; if(gi('o-imgPreview')){ gi('o-imgPreview').src=''; gi('o-imgPreview').style.display='none'; } if(picEl) picEl.value='';
+    if(typeof loadTanCheng==='function') loadTanCheng();
+  };
+  grun('updateContactedInfo',[cid,info,oMediaQ.length>0],function(){
+    var q = oMediaQ;
+    (function up(idx){
+      if(idx >= q.length){
+        gi('o-pbc').style.display='none'; gi('o-pb').style.width='0%';
+        if(dup.status === 'uploading'){ setTimeout(finish,4000); grun('finalizeSendToDraft',[cid],finish,finish); } else finish();
+        return;
+      }
+      gi('o-pbc').style.display='block';
+      var m = q[idx]; gi('o-pb').style.width=Math.round((idx/q.length)*100)+'%';
+      gi('o-up-status').textContent='Uploading '+(idx+1)+'/'+q.length+': '+m.name;
+      if(server === 'google'){
+        grun('saveMediaToDrive',[m.dataUrl,m.name,cid],function(){ up(idx+1); },function(){ up(idx+1); });
+      } else {
+        var fd = new FormData(); fd.append('file', m.dataUrl); fd.append('upload_preset', 'ohana_portal_preset');
+        fetch('https://api.cloudinary.com/v1_1/da3q4esag/auto/upload', {method:'POST', body:fd})
+          .then(function(r){return r.json();})
+          .then(function(data){ if(data.secure_url) grun('saveMediaUrlToDb',[data.secure_url,cid]); up(idx+1); })
+          .catch(function(){ up(idx+1); });
+      }
+    })(0);
+  },function(e){ showORes('Error: '+e.message,'e'); btn.disabled=false; btn.textContent='🚀 Send to Draft'; });
+}
+
+function sendOtherGo(){
   var cid=v('o-cid'), info=v('o-info');
   var picEl=gi('o-picData'); var picData=picEl?picEl.value:'';
   if(picData){ oMediaQ.unshift({dataUrl:picData, name:'profile_pic.jpg', type:'image/jpeg'}); }
@@ -4189,7 +4335,7 @@ function safeJson(obj){return encodeURIComponent(JSON.stringify(obj)).replace(/'
 var API_URL = 'https://script.google.com/macros/s/AKfycbxwcMH5irlMuFX9xCryU5WVzcHutwTWV768pk0dsGKYs0tfA4daxwNC-tSHw0HWXwkV/exec';
 // Read-only calls (login, get*, search…) are retried automatically; anything that
 // writes data is sent once only, so a retry can never create a duplicate.
-var API_RETRY = /^(login|get[A-Z]|search|find|finderSearch|finderCheck|uid)/;
+var API_RETRY = /^(login|get[A-Z]|search|find|finderSearch|finderCheck|checkDuplicateSend|uid)/;
 function grun(fn,args,success,fail){
   if(window.google && google.script && google.script.run){
     var runner=google.script.run;if(success)runner=runner.withSuccessHandler(success);if(fail)runner=runner.withFailureHandler(fail);else runner=runner.withFailureHandler(function(e){console.error(fn+' failed:',e.message);});runner[fn].apply(runner,args);

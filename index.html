@@ -148,6 +148,7 @@ textarea{resize:vertical;min-height:80px}
 .btn-p{background:var(--pri);color:#fff;border-color:var(--pri)}
 .btn-g{background:#34a853;color:#fff;border-color:#34a853}
 .btn-o{background:#f2994a;color:#fff;border-color:#f2994a}
+.edit-banner{background:var(--pri-bg);border:1px solid var(--pri);color:var(--pri-d);border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;line-height:1.5}.eb-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .btn-r{color:#ea4335;border-color:#fad2cf}.btn-r:hover{background:var(--red-bg)}
 .btn-sm{height:30px;padding:0 10px;font-size:11px;border-radius:7px}
 .btn-full{width:100%}
@@ -961,6 +962,10 @@ html[data-theme="dark"] .mb-b{color:#9cc0ff;background:rgba(79,141,253,.16)}
     </div>
     <input type="hidden" id="sub-linkid"/><input type="hidden" id="sub-url"/><input type="hidden" id="sub-rnid"/>
     <input type="hidden" id="sub-method"/><input type="hidden" id="sub-cid"/><input type="hidden" id="sub-std"/>
+    <div id="sub-edit-banner" class="edit-banner" style="display:none">
+      <div>✏️ <b>正在编辑刚才发送的房源</b>，改好后点下面的「Update」保存。</div>
+      <div class="eb-btns"><button class="btn btn-sm" id="sub-edit-typed" onclick="editUseTyped('sub')">↩︎ 用我刚输入的内容</button><button class="btn btn-sm" onclick="editCancel('sub')">取消编辑</button></div>
+    </div>
     <div class="fr">
       <label style="font-weight:700">Listing Info</label>
       <textarea id="sub-info" style="min-height:110px" placeholder="Rent, location, rooms, contact, any notes…"></textarea>
@@ -1032,6 +1037,10 @@ html[data-theme="dark"] .mb-b{color:#9cc0ff;background:rgba(79,141,253,.16)}
       </div>
       <div class="prog-bar-container" id="o-pbc"><div class="prog-bar" id="o-pb"></div></div>
       <div id="o-up-status" style="font-size:11px;color:var(--pri);margin-top:4px;font-weight:600"></div>
+    </div>
+    <div id="o-edit-banner" class="edit-banner" style="display:none">
+      <div>✏️ <b>正在编辑刚才发送的房源</b>，改好后点下面的「Update」保存。</div>
+      <div class="eb-btns"><button class="btn btn-sm" id="o-edit-typed" onclick="editUseTyped('o')">↩︎ 用我刚输入的内容</button><button class="btn btn-sm" onclick="editCancel('o')">取消编辑</button></div>
     </div>
     <button class="btn btn-p btn-full" id="o-send-btn" onclick="sendOther()">🚀 Send to Draft <span class="coin">¥4</span></button>
     <div id="o-result" style="display:none;margin-top:8px;padding:9px;border-radius:8px;font-size:13px;font-weight:600"></div>
@@ -2872,6 +2881,7 @@ function loadContacted(){
 }
 
 function openSubBox(enc){
+  editState.sub = null; gi('sub-edit-banner').style.display = 'none';
   var r = typeof enc === 'string' ? JSON.parse(decodeURIComponent(enc)) : enc;
   qsa('#cont-list .lcard').forEach(function(c){c.style.borderColor='';c.style.background='';});
   var card=gi('cc-'+r.ID);if(card){card.style.borderColor='var(--pri)';card.style.background='var(--panel)';}
@@ -2894,7 +2904,7 @@ function openSubBox(enc){
   gi('sub-result').style.display='none';gi('sub-box').style.display='block';
   setTimeout(function(){gi('sub-box').scrollIntoView({behavior:'smooth',block:'start'});},80);
 }
-function closeSubBox(){gi('sub-box').style.display='none';qsa('#cont-list .lcard').forEach(function(c){c.style.borderColor='';c.style.background='';});}
+function closeSubBox(){editState.sub=null;gi('sub-edit-banner').style.display='none';gi('sub-box').style.display='none';qsa('#cont-list .lcard').forEach(function(c){c.style.borderColor='';c.style.background='';});}
 
 function queueMedia(input){
   var prev=gi('sub-preview'),st=gi('sub-up-status');
@@ -2997,7 +3007,10 @@ function preSendGuards(info, rn, lk, done, onWait){
         btns.push({text:'取消', fn:function(){}});
         ohModal('🔔 这个房源已经发送过啦', h, btns);
       };
-      if(st.ready) go(); else { st.cb = go; if(onWait) onWait(); }
+      if(st.ready) go(); else {
+        st.cb = go; if(onWait) onWait();
+        setTimeout(function(){ if(st.cb){ var c2 = st.cb; st.cb = null; st.res = null; c2(); } }, 8000);   // slow server: don't hold the send hostage
+      }
     }},
     {text:'返回修改', fn:function(){}}
   ]);
@@ -3008,11 +3021,7 @@ function finderSend(){
   if(!info){showSubRes('Please fill in listing info first.','e');return;}
   if(!linkId){showSubRes('Link ID missing. Re-match the URL.','e');return;}
   preSendGuards(info, gi('sub-rnid').value, linkId, function(mode, dup){
-    if(mode === 'edit'){
-      gi('sub-cid').value = dup.id; gi('sub-std').value = dup.status;
-      gi('sub-send-btn').style.display = 'none'; gi('sub-block-btn').style.display = 'none'; gi('sub-upd-btn').style.display = '';
-      finderUpdate();
-    } else finderSendGo();
+    if(mode === 'edit') enterEdit('sub', dup); else finderSendGo();
   }, function(){ showSubRes('正在检查是否重复发送…','i'); });
 }
 
@@ -3242,9 +3251,50 @@ function sendOther(){
   if(!cid){showORes('Contact ID required.','e');return;}
   if(!info){showORes('Info required.','e');return;}
   preSendGuards(info, cid, 'none', function(mode, dup){
-    if(mode === 'edit') otherEditExisting(dup); else sendOtherGo();
+    if(mode === 'edit') enterEdit('o', dup); else sendOtherGo();
   }, function(){ showORes('正在检查是否重复发送…','i'); });
 }
+
+// ── 编辑刚才发送的房源：把已发送的内容放回输入框，改好后再点 Update ──
+var editState = {sub:null, o:null};
+function enterEdit(kind, dup){
+  var ta = gi(kind === 'sub' ? 'sub-info' : 'o-info'), typed = ta.value, st = {dup:dup, typed:typed};
+  if(kind === 'sub'){ st.prevCid = gi('sub-cid').value; st.prevStd = gi('sub-std').value; }
+  editState[kind] = st;
+  var differs = !!dup.info && dup.info !== typed;
+  if(differs) ta.value = dup.info;                      // show what was actually sent
+  gi(kind + '-edit-typed').style.display = differs ? '' : 'none';
+  gi(kind + '-edit-banner').style.display = 'block';
+  if(kind === 'sub'){
+    gi('sub-cid').value = dup.id; gi('sub-std').value = dup.status;
+    gi('sub-send-btn').style.display = 'none'; gi('sub-block-btn').style.display = 'none'; gi('sub-upd-btn').style.display = '';
+    gi('sub-result').style.display = 'none';
+  } else {
+    var btn = gi('o-send-btn'); editState.o.btnHtml = btn.innerHTML;
+    btn.innerHTML = '✏️ Update 已发送的房源'; btn.onclick = function(){ otherEditExisting(dup); };
+    gi('o-result').style.display = 'none';
+  }
+  ta.focus();
+}
+function editUseTyped(kind){
+  var st = editState[kind]; if(!st) return;
+  gi(kind === 'sub' ? 'sub-info' : 'o-info').value = st.typed;
+  gi(kind + '-edit-typed').style.display = 'none';
+}
+// back to the normal "send" mode. keepText=false → also put the finder's own text back
+function editReset(kind, keepText){
+  var st = editState[kind]; gi(kind + '-edit-banner').style.display = 'none';
+  if(!st){ return; }
+  if(!keepText) gi(kind === 'sub' ? 'sub-info' : 'o-info').value = st.typed;
+  if(kind === 'sub'){
+    gi('sub-cid').value = st.prevCid || ''; gi('sub-std').value = st.prevStd || '';
+    gi('sub-send-btn').style.display = ''; gi('sub-block-btn').style.display = ''; gi('sub-upd-btn').style.display = 'none';
+  } else {
+    var btn = gi('o-send-btn'); btn.innerHTML = st.btnHtml || '🚀 Send to Draft <span class="coin">¥4</span>'; btn.onclick = function(){ sendOther(); };
+  }
+  editState[kind] = null;
+}
+function editCancel(kind){ editReset(kind, false); }
 
 // Edit the listing that was already sent (works even after a draft maker took it — the
 // Active Inbox reads this same row, so it updates there too). No second payment.
@@ -3257,7 +3307,7 @@ function otherEditExisting(dup){
   var finished = false;
   var finish = function(){
     if(finished) return; finished = true;
-    btn.disabled=false; btn.textContent='🚀 Send to Draft';
+    editReset('o', true); btn.disabled=false;
     showORes('✅ 已更新刚才发送的房源（草稿师的 Inbox 里也会同步更新）','s');
     ['o-cid','o-info'].forEach(function(id){ if(gi(id)) gi(id).value=''; });
     oMediaQ=[]; if(gi('o-preview')) gi('o-preview').innerHTML=''; if(gi('o-up-status')) gi('o-up-status').textContent='';
@@ -3285,7 +3335,7 @@ function otherEditExisting(dup){
           .catch(function(){ up(idx+1); });
       }
     })(0);
-  },function(e){ showORes('Error: '+e.message,'e'); btn.disabled=false; btn.textContent='🚀 Send to Draft'; });
+  },function(e){ showORes('Error: '+e.message+'（内容还在，可以再点一次 Update）','e'); btn.disabled=false; btn.innerHTML='✏️ Update 已发送的房源'; });
 }
 
 function sendOtherGo(){

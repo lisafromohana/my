@@ -1488,42 +1488,49 @@ function initApp(){
   updateGlobalBadges();
 }
 
+var POLL_MS = 15000, autoTick = null;
+function startPoll(fn){
+  autoTick = fn;
+  return setInterval(function(){ if(!document.hidden) fn(); }, POLL_MS);
+}
+document.addEventListener('visibilitychange', function(){ if(!document.hidden && autoTick && typeof CU !== 'undefined' && CU) { try{ autoTick(); }catch(e){} } });
+
 function switchRole(r){
   ['admin','finder','draft'].forEach(function(x){gi('nav-'+x).classList.toggle('hidden',x!==r);gi('rt-'+x).classList.toggle('active',x===r);});
   clearInterval(autoTimer);
   
   if(r==='admin') { 
       nav('links'); 
-      autoTimer=setInterval(function(){
+      autoTimer=startPoll(function(){
           updateGlobalBadges();
           if(gi('page-links').classList.contains('active')) { loadLinkStats(); loadLinks(); }
           if(gi('page-duplicates').classList.contains('active')) { loadDupQueue(); }
           if(gi('page-ongoing').classList.contains('active')) { loadOngoingDrafts(null); }
           if(gi('page-analytics').classList.contains('active')) { loadAnalytics(); }
           if(gi('page-finder-huashu').classList.contains('active')) { loadHuashu(); }
-      }, 5000); 
+      }); 
   }
   if(r==='finder'){
       nav('finder-available');
       checkFinderPopups();
-      autoTimer=setInterval(function(){
+      autoTimer=startPoll(function(){
           updateGlobalBadges();
           if(gi('page-finder-available').classList.contains('active')) loadAvailable(true);
           if(gi('page-finder-contacted').classList.contains('active') && gi('sub-box').style.display !== 'block') { loadContacted(); }
           if(gi('page-finder-tancheng').classList.contains('active') && gi('sub-box').style.display !== 'block') { loadTanCheng(); }
           if(gi('page-finder-returns').classList.contains('active')) { loadFinderReturns(); }
           if(gi('page-analytics').classList.contains('active')) { loadAnalytics(); }
-      }, 5000);
+      });
   }
   if(r==='draft') { 
       nav('draft-inbox'); 
-      autoTimer=setInterval(function(){
+      autoTimer=startPoll(function(){
           updateGlobalBadges();
           if(gi('page-draft-inbox').classList.contains('active')) loadDraftInbox();
           if(gi('page-draft-links').classList.contains('active')) loadDraftLinks(); // Add this line
           if(gi('page-draft-create').classList.contains('active')) refreshDrafts();
           if(gi('page-analytics').classList.contains('active')) { loadAnalytics(); }
-      }, 5000); 
+      }); 
   }
 }
 
@@ -4393,23 +4400,37 @@ function grun(fn,args,success,fail){
   }
   var onErr=function(msg){var e={message:msg};if(fail)fail(e);else console.error(fn+' failed:',msg);};
   if(!API_URL){onErr('API_URL is not set');return;}
-  var tries = API_RETRY.test(fn) ? 3 : 1;
-  (function attempt(n){
+  // Read-only/idempotent calls (login, get*, search…) are "hedged": if no answer after a few
+  // seconds a 2nd/3rd identical request is fired in parallel and the first answer wins — much
+  // better on slow or flaky networks than waiting, aborting and starting over. Writes are sent
+  // exactly once and given plenty of time (they may well have saved even if the reply is slow).
+  var safe = API_RETRY.test(fn), maxTry = safe ? 3 : 1, launched = 0, failed = 0, settled = false, live = [], hedgeT = null;
+  var payload = JSON.stringify({fn:fn,args:args||[]});
+  var overallT = setTimeout(function(){ finish(null); }, safe ? 45000 : 120000);
+  function finish(j){
+    if(settled) return; settled = true;
+    clearTimeout(overallT); clearTimeout(hedgeT);
+    live.forEach(function(c){ try{ c.abort(); }catch(e){} });
+    if(j){ if(j.ok){ if(success) success(j.result); } else onErr(j.error || 'Request failed'); }
+    else onErr(safe ? 'Could not reach the server — please check your connection and try again.' : 'The server is taking too long to answer. It may still have saved — refresh and check before sending again.');
+  }
+  function launch(){
+    if(settled || launched >= maxTry) return;
+    launched++;
     var ctl = ('AbortController' in window) ? new AbortController() : null;
-    var timer = ctl ? setTimeout(function(){ ctl.abort(); }, tries > 1 ? (n === 1 ? 20000 : 30000) : 120000) : null;
+    if(ctl) live.push(ctl);
     // text/plain keeps this a "simple" request (no CORS preflight), which Apps Script web apps support.
-    fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({fn:fn,args:args||[]}),redirect:'follow',signal:ctl?ctl.signal:undefined})
+    fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:payload,redirect:'follow',signal:ctl?ctl.signal:undefined})
       .then(function(r){return r.text();})
       .then(function(t){ try{ return JSON.parse(t); }catch(e){ throw new Error('bad response'); } })
-      .then(function(j){
-        if(timer) clearTimeout(timer);
-        if(j && j.ok){ if(success) success(j.result); } else onErr((j && j.error) || 'Request failed');
-      }, function(e){
-        if(timer) clearTimeout(timer);
-        if(n < tries) setTimeout(function(){ attempt(n+1); }, 500 * n);
-        else onErr(tries > 1 ? 'Could not reach the server — please check your connection and try again.' : 'The server is taking too long to answer. It may still have saved — refresh and check before sending again.');
+      .then(function(j){ finish(j); }, function(){
+        failed++;
+        if(settled) return;
+        if(failed >= launched){ if(launched < maxTry) setTimeout(launch, 300 * failed); else finish(null); }
       });
-  })(1);
+    if(safe && launched < maxTry){ clearTimeout(hedgeT); hedgeT = setTimeout(launch, launched === 1 ? 6000 : 10000); }
+  }
+  launch();
 }
 
 // Wake the Google server and open the connection while the user is still typing,

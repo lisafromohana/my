@@ -10,13 +10,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
   <style>
-    /* The outer page must never scroll. On iPhone Safari 100vh is TALLER than
-       the visible screen (it includes the space behind the address bar), which
-       cut off the bottom of the portal. And if the outer page can scroll,
-       Safari slides it up when the keyboard opens (tap / paste in a field) and
-       leaves it there, hiding the top of the portal.
-       So: pin the page with position:fixed and size it to the real visible
-       height (100dvh, with --app-h from JS as a fallback for older iOS). */
     html, body {
       margin: 0;
       padding: 0;
@@ -26,21 +19,16 @@
       overscroll-behavior: none;
       background-color: #f0f2f5;
     }
-    body {
-      position: fixed;
-      inset: 0;
-      height: var(--app-h, 100%);
-    }
-    @supports (height: 100dvh) {
-      body { height: var(--app-h, 100dvh); }
-    }
 
+    /* The frame is sized to the screen WITHOUT the keyboard (--app-h is set
+       from window.innerHeight and only changes on rotation / address bar),
+       so opening the keyboard never resizes or moves the portal. */
     iframe {
-      position: absolute;
+      position: fixed;
       top: 0;
       left: 0;
       width: 100%;
-      height: 100%;
+      height: var(--app-h, 100%);
       border: none;
       display: block;
     }
@@ -52,27 +40,50 @@
   </iframe>
 
   <script>
-    // Keep the frame exactly as tall as the visible screen, and snap the outer
-    // page back to the top whenever Safari tries to shift it (keyboard open /
-    // close, paste prompt, address bar showing or hiding).
     (function () {
       var vv = window.visualViewport;
-      function fit() {
-        var h = vv ? vv.height : window.innerHeight;
-        document.documentElement.style.setProperty('--app-h', Math.round(h) + 'px');
-        if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+      var fullH = window.innerHeight;
+
+      function keyboardOpen() {
+        // On iPhone the keyboard shrinks the visual viewport, not innerHeight.
+        return vv && vv.height < window.innerHeight * 0.8;
       }
-      fit();
-      window.addEventListener('resize', fit);
-      window.addEventListener('orientationchange', function () { setTimeout(fit, 300); });
-      window.addEventListener('scroll', function () { if (window.scrollY || window.scrollX) window.scrollTo(0, 0); });
+
+      function setHeight() {
+        if (keyboardOpen()) return;            // never resize for the keyboard
+        fullH = window.innerHeight;
+        document.documentElement.style.setProperty('--app-h', fullH + 'px');
+      }
+
+      // iPhone Safari pushes the page up when the keyboard opens (e.g. typing
+      // the password) and often leaves it there after the keyboard closes.
+      // Force it back to the top a few times while it settles.
+      function snapBack() {
+        [0, 60, 200, 450].forEach(function (ms) {
+          setTimeout(function () {
+            if (keyboardOpen()) return;
+            window.scrollTo(0, 0);
+            document.documentElement.scrollTop = 0;
+            document.body.scrollTop = 0;
+          }, ms);
+        });
+      }
+
+      setHeight();
+      window.addEventListener('resize', function () { setHeight(); snapBack(); });
+      window.addEventListener('orientationchange', function () { setTimeout(function () { setHeight(); snapBack(); }, 350); });
+      window.addEventListener('scroll', function () { if (!keyboardOpen() && (window.scrollY || window.scrollX)) window.scrollTo(0, 0); });
+      // Focus returning to this page = the keyboard was dismissed.
+      window.addEventListener('focus', snapBack);
+
       if (vv) {
-        vv.addEventListener('resize', fit);
-        vv.addEventListener('scroll', function () { if (window.scrollY) window.scrollTo(0, 0); });
+        var wasOpen = false;
+        vv.addEventListener('resize', function () {
+          var open = keyboardOpen();
+          if (wasOpen && !open) { setHeight(); snapBack(); }   // keyboard just closed
+          wasOpen = open;
+        });
       }
-      // When focus comes back from the portal (keyboard closed), re-fit.
-      window.addEventListener('focus', function () { setTimeout(fit, 50); });
-      document.addEventListener('focusout', function () { setTimeout(fit, 100); }, true);
     })();
   </script>
 
